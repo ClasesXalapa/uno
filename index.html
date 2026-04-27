@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UNO Online 🎴</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       PANTALLA 1: LOBBY
+  ═══════════════════════════════════════════════════════════ -->
+  <div id="screen-lobby" class="screen active">
+    <div class="lobby-wrapper">
+
+      <div class="lobby-header">
+        <div class="logo-card">🎴</div>
+        <h1>UNO Online</h1>
+        <p class="lobby-subtitle">Sin anuncios · Sin límites · Solo diversión</p>
+      </div>
+
+      <!-- Error de configuración Firebase -->
+      <div id="firebase-error" class="alert alert-error" style="display:none;">
+        ⚠️ <strong>Firebase no configurado.</strong><br>
+        Copia <code>firebase-config.example.js</code> → <code>firebase-config.js</code>
+        y rellena tus datos. Ver <code>README.md</code>.
+      </div>
+
+      <div class="lobby-container">
+
+        <!-- Crear sala -->
+        <div class="lobby-card">
+          <h2 class="card-title"><span class="card-icon">🏠</span> Crear sala</h2>
+          <div class="form-group">
+            <label for="create-name">Tu nombre</label>
+            <input type="text" id="create-name" class="input-field"
+              placeholder="Escribe tu nombre..." maxlength="20" autocomplete="off" />
+          </div>
+          <button id="btn-create" class="btn btn-primary btn-full">
+            Crear sala nueva
+          </button>
+        </div>
+
+        <div class="lobby-divider"><span>o</span></div>
+
+        <!-- Unirse -->
+        <div class="lobby-card">
+          <h2 class="card-title"><span class="card-icon">🚪</span> Unirse a sala</h2>
+          <div class="form-group">
+            <label for="join-name">Tu nombre</label>
+            <input type="text" id="join-name" class="input-field"
+              placeholder="Escribe tu nombre..." maxlength="20" autocomplete="off" />
+          </div>
+          <div class="form-group">
+            <label for="join-code">Código de sala</label>
+            <input type="text" id="join-code" class="input-field input-code"
+              placeholder="Ej: ABC123" maxlength="6" autocomplete="off" />
+          </div>
+          <button id="btn-join" class="btn btn-secondary btn-full">
+            Unirse a la sala
+          </button>
+        </div>
+
+      </div>
+
+      <!-- Panel reconexión -->
+      <div id="reconnect-panel" class="reconnect-panel" style="display:none;">
+        <p>🔄 Tienes una partida activa.</p>
+        <p id="reconnect-info"></p>
+        <div class="reconnect-buttons">
+          <button id="btn-reconnect" class="btn btn-accent">Reconectarme</button>
+          <button id="btn-clear-session" class="btn btn-ghost">Olvidar sesión</button>
+        </div>
+      </div>
+
+      <div id="lobby-error" class="alert alert-error" style="display:none;"></div>
+
+      <div id="lobby-loading" class="loading-indicator" style="display:none;">
+        <div class="spinner"></div>
+        <span id="loading-text">Conectando...</span>
+      </div>
+
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════════════════
+       PANTALLA 2: SALA DE ESPERA
+  ═══════════════════════════════════════════════════════════ -->
+  <div id="screen-waiting" class="screen">
+    <div class="waiting-wrapper">
+
+      <div class="waiting-header">
+        <h1>🎴 Sala de espera</h1>
+        <p class="waiting-subtitle">Comparte el código o el enlace</p>
+      </div>
+
+      <div class="share-section">
+        <div class="share-card">
+          <label class="share-label">Código de sala</label>
+          <div class="share-code-row">
+            <span id="display-room-code" class="room-code-big">------</span>
+            <button id="btn-copy-code" class="btn btn-ghost btn-icon" title="Copiar código">📋</button>
+          </div>
+        </div>
+        <div class="share-card">
+          <label class="share-label">Enlace para compartir</label>
+          <div class="share-url-row">
+            <span id="display-room-url" class="room-url"></span>
+            <button id="btn-copy-url" class="btn btn-ghost btn-icon" title="Copiar enlace">🔗</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="waiting-players-section">
+        <div class="players-header">
+          <h3>Jugadores</h3>
+          <span id="player-count" class="player-count-badge">0 / 6</span>
+        </div>
+        <ul id="waiting-players" class="waiting-players-list"></ul>
+      </div>
+
+      <div class="waiting-actions">
+        <button id="btn-start" class="btn btn-primary btn-large" style="display:none;" disabled>
+          🎮 Iniciar partida
+        </button>
+        <p id="start-hint" class="start-hint" style="display:none;">
+          Necesitas al menos 2 jugadores para iniciar
+        </p>
+        <p id="waiting-for-host" class="waiting-hint" style="display:none;">
+          ⏳ Esperando al anfitrión...
+        </p>
+      </div>
+
+      <button id="btn-leave-waiting" class="btn btn-ghost btn-sm">← Salir</button>
+
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════════════════
+       PANTALLA 3: JUEGO
+  ═══════════════════════════════════════════════════════════ -->
+  <div id="screen-game" class="screen">
+
+    <!-- ── Zona superior: jugadores rivales (hasta 5) ── -->
+    <div id="rivals-zone" class="rivals-zone">
+      <!-- Se llena dinámicamente: hasta 5 jugadores rivales -->
+    </div>
+
+    <!-- ── Zona central: mesa ── -->
+    <div class="table-zone">
+
+      <!-- Info de sala y turno -->
+      <div class="table-info-bar">
+        <span class="sala-mini">Sala: <strong id="game-room-code">------</strong></span>
+        <span id="turn-indicator" class="turn-indicator">Turno de: ---</span>
+        <span id="direction-indicator" class="direction-indicator" title="Sentido de juego">↻</span>
+      </div>
+
+      <!-- Mesa central: mazo + descarte -->
+      <div class="table-center">
+
+        <!-- Mazo (boca abajo) -->
+        <div class="deck-area">
+          <div id="draw-pile" class="card card-back draw-pile" title="Robar carta">
+            <div class="card-back-design">🎴</div>
+          </div>
+          <span id="draw-pile-count" class="pile-count"></span>
+        </div>
+
+        <!-- Descarte (boca arriba) -->
+        <div class="discard-area">
+          <div id="discard-pile" class="card discard-pile">
+            <div class="card-inner">
+              <span class="card-value-display">?</span>
+            </div>
+          </div>
+          <!-- Color activo (relevante tras comodín) -->
+          <div id="active-color-dot" class="active-color-dot" title="Color activo"></div>
+        </div>
+
+      </div>
+
+      <!-- Indicador de cadena activa (+2/+4 acumulados) -->
+      <div id="chain-indicator" class="chain-indicator" style="display:none;">
+        ⚠️ Cadena activa: <strong id="chain-amount">+0</strong> cartas
+      </div>
+
+    </div>
+
+    <!-- ── Zona de control: timer + UNO ── -->
+    <div class="control-zone">
+
+      <!-- Timer -->
+      <div class="timer-section">
+        <div class="timer-bar-wrapper">
+          <div id="game-timer-bar" class="timer-bar"></div>
+        </div>
+        <span id="game-timer-display" class="timer-display">25</span>
+      </div>
+
+      <!-- Botón UNO — SIEMPRE VISIBLE -->
+      <button id="btn-uno" class="btn-uno" title="¡Presiona antes de tu penúltima carta!">
+        UNO!
+      </button>
+
+    </div>
+
+    <!-- ── Mano del jugador local ── -->
+    <div class="hand-zone">
+      <div class="hand-label">
+        <span id="hand-player-name">Tu mano</span>
+        <span id="hand-card-count" class="hand-count"></span>
+      </div>
+      <div id="player-hand" class="player-hand">
+        <!-- Cartas generadas dinámicamente -->
+      </div>
+      <!-- Botón robar carta -->
+      <button id="btn-draw" class="btn btn-draw" style="display:none;">
+        🃏 Robar carta
+      </button>
+      <!-- Botón pasar turno (después de robar) -->
+      <button id="btn-pass" class="btn btn-ghost btn-sm" style="display:none;">
+        Pasar turno
+      </button>
+    </div>
+
+    <!-- ── Log de eventos (lateral o inferior) ── -->
+    <div id="event-log-panel" class="event-log-panel">
+      <div class="event-log-header">
+        <span>Eventos</span>
+        <button id="btn-toggle-log" class="btn btn-ghost btn-sm">▼</button>
+      </div>
+      <ul id="game-event-log" class="game-event-log"></ul>
+    </div>
+
+    <!-- Mensaje temporal sobre la mesa -->
+    <div id="game-msg" class="game-message" style="display:none;"></div>
+
+  </div><!-- /#screen-game -->
+
+
+  <!-- ═══════════════════════════════════════════════════════════
+       MODAL 1: ELEGIR COLOR (tras jugar +4 o cambio de color)
+  ═══════════════════════════════════════════════════════════ -->
+  <div id="modal-choose-color" class="modal-overlay" style="display:none;">
+    <div class="modal-content modal-color">
+      <h2>Elige un color</h2>
+      <p class="modal-subtitle">Selecciona el color que continuará el juego</p>
+      <div class="color-picker">
+        <button class="color-btn color-btn-red"    data-color="red">🔴 Rojo</button>
+        <button class="color-btn color-btn-blue"   data-color="blue">🔵 Azul</button>
+        <button class="color-btn color-btn-green"  data-color="green">🟢 Verde</button>
+        <button class="color-btn color-btn-yellow" data-color="yellow">🟡 Amarillo</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════════════════
+       MODAL 2: JUGADOR TERMINÓ (sin cartas)
+  ═══════════════════════════════════════════════════════════ -->
+  <div id="modal-player-finished" class="modal-overlay" style="display:none;">
+    <div class="modal-content modal-finished">
+      <div class="finished-trophy">🏆</div>
+      <h2 id="finished-title">¡Sin cartas!</h2>
+      <p id="finished-player-name" class="finished-name"></p>
+      <p id="finished-position" class="finished-position"></p>
+      <div id="finished-host-actions" style="display:none;">
+        <p class="finished-host-hint">Tú decides (eres el anfitrión):</p>
+        <div class="finished-buttons">
+          <button id="btn-continue-game" class="btn btn-accent btn-large">
+            ▶️ Seguir jugando
+          </button>
+          <button id="btn-end-game" class="btn btn-ghost">
+            🏁 Finalizar partida
+          </button>
+        </div>
+      </div>
+      <div id="finished-wait-msg" style="display:none;">
+        <p class="waiting-hint">⏳ Esperando decisión del anfitrión...</p>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════════════════
+       MODAL 3: RESULTADOS FINALES
+  ═══════════════════════════════════════════════════════════ -->
+  <div id="modal-final-results" class="modal-overlay" style="display:none;">
+    <div class="modal-content modal-results">
+      <h2 class="results-title">🏆 Resultados finales</h2>
+      <table id="results-table" class="results-table">
+        <thead>
+          <tr>
+            <th>Posición</th>
+            <th>Jugador</th>
+          </tr>
+        </thead>
+        <tbody id="results-body">
+          <!-- Se llena dinámicamente -->
+        </tbody>
+      </table>
+      <button id="btn-new-game" class="btn btn-primary btn-large">
+        🎴 Jugar de nuevo
+      </button>
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════════════════
+       MODAL: CARGANDO
+  ═══════════════════════════════════════════════════════════ -->
+  <div id="loading-modal" class="modal-overlay modal-loading" style="display:none;">
+    <div class="modal-content modal-loading-content">
+      <div class="spinner spinner-large"></div>
+      <p id="loading-modal-text">Cargando...</p>
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════════════════
+       SCRIPTS — Orden importante
+  ═══════════════════════════════════════════════════════════ -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+
+  <!-- Config Firebase: copia firebase-config.example.js → firebase-config.js -->
+  <script src="firebase-config.js" onerror="window.FIREBASE_CONFIG_MISSING=true;"></script>
+
+  <!-- Definición del mazo (separado para fácil extensión de comodines) -->
+  <script src="cards.js"></script>
+
+  <!-- Lógica principal -->
+  <script src="app.js"></script>
+
+</body>
+</html>

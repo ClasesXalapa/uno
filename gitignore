@@ -1,0 +1,19 @@
+# Tu configuración privada de Firebase (contiene API keys)
+# NUNCA subas este archivo a GitHub
+firebase-config.js
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editores
+.vscode/
+.idea/
+*.swp
+*~
+
+# Node (si en el futuro usas build tools)
+node_modules/
+.env
+.env.local
