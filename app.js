@@ -891,7 +891,7 @@ async function applyCardEffect(card, room, chosenColor) {
 
     case CARD_TYPES.NUMBER:
       // Sin efecto especial → siguiente turno normal
-      await nextTurn(room);
+      await nextTurn(localState.playerId);
       break;
 
     case CARD_TYPES.DRAW_TWO:
@@ -929,7 +929,7 @@ async function applyCardEffect(card, room, chosenColor) {
 
     default:
       console.warn('[applyCardEffect] Tipo desconocido:', card.type);
-      await nextTurn(room);
+      await nextTurn(localState.playerId);
   }
 }
 
@@ -944,8 +944,7 @@ async function handleDrawTwo(room) {
     'turn/drawChainActive': true,
   });
   await addEvent(`⚠️ Cadena activa: +${pending} cartas acumuladas.`, 'chain');
-  // nextTurn lee fresh data internamente — el null hint es suficiente
-  await nextTurn(null);
+  await nextTurn(localState.playerId);
 }
 
 /**
@@ -960,7 +959,7 @@ async function handleDrawFour(room, chosenColor) {
   });
   const colorLabel = chosenColor ? COLOR_NAMES[chosenColor] : '';
   await addEvent(`⚠️ Cadena activa: +${pending} cartas. Color: ${colorLabel}`, 'chain');
-  await nextTurn(null);
+  await nextTurn(localState.playerId);
 }
 
 /**
@@ -970,7 +969,7 @@ async function handleDrawFour(room, chosenColor) {
 async function handleWildColor(room, chosenColor) {
   const colorLabel = chosenColor ? COLOR_NAMES[chosenColor] : '';
   await addEvent(`🎨 Color cambiado a ${colorLabel}.`, 'special');
-  await nextTurn(room);
+  await nextTurn(localState.playerId);
 }
 
 /**
@@ -979,15 +978,17 @@ async function handleWildColor(room, chosenColor) {
  * primero al siguiente (que está bloqueado), luego al de después.
  */
 async function handleSkip(room) {
-  const nextId   = getNextPlayerId(room);
+  // Usar currentPlayerId explícito para evitar el bug de indexOf=-1
+  const currentPlayerId = localState.playerId;
+
+  // El siguiente (que será bloqueado)
+  const nextId   = getNextPlayerId(room, currentPlayerId);
   const nextName = room.players[nextId]?.name || 'Jugador';
   await addEvent(`⊘ ${nextName} pierde su turno.`, 'skip');
 
-  // Marcar el turno del siguiente como skipped y pasarlo directamente
-  const ordered   = getPlayersOrdered(room, true);
-  const nextIdx   = ordered.indexOf(nextId);
-  const afterIdx  = (nextIdx + (room.direction === 1 ? 1 : -1) + ordered.length) % ordered.length;
-  const afterId   = ordered[afterIdx];
+  // El que juega después del bloqueado (2 pasos desde current)
+  const afterId  = getNextPlayerId(room, nextId);
+  const afterName = room.players[afterId]?.name || 'Jugador';
 
   const now = firebase.database.ServerValue.TIMESTAMP;
   await roomRef().update({
@@ -999,8 +1000,8 @@ async function handleSkip(room) {
     'turn/drewCard':        false,
     'turn/skipped':         false,
   });
-  await addEvent(`▶️ Turno de ${room.players[afterId]?.name || 'Jugador'}.`, 'turn');
-  console.log('[handleSkip] Skipped', room.players[nextId]?.name, '→', room.players[afterId]?.name);
+  await addEvent(`▶️ Turno de ${afterName}.`, 'turn');
+  console.log('[handleSkip]', room.players[currentPlayerId]?.name, '→ skip', nextName, '→', afterName);
 }
 
 /**
@@ -1021,7 +1022,7 @@ async function handleReverse(room) {
   const newDirection = room.direction === 1 ? -1 : 1;
   await roomRef().update({ 'direction': newDirection });
   await addEvent(`↺ Sentido invertido (${newDirection === 1 ? '→' : '←'}).`, 'reverse');
-  await nextTurn({ ...room, direction: newDirection });
+  await nextTurn(localState.playerId);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1098,7 +1099,7 @@ async function passTurn() {
   if (!localState.drewThisTurn) return;
 
   await addEvent(`⏭️ ${localState.playerName} pasó el turno.`, 'skip');
-  await nextTurn(room);
+  await nextTurn(localState.playerId);
 }
 
 /**
@@ -1111,7 +1112,7 @@ async function drawChainCards() {
   if (!room.turn?.drawChainActive) return;
 
   const amount = room.turn.pendingDraw || 0;
-  if (amount === 0) { await nextTurn(room); return; }
+  if (amount === 0) { await nextTurn(localState.playerId); return; }
 
   await drawCardsFromDeck(localState.playerId, amount, room);
 
@@ -1125,8 +1126,7 @@ async function drawChainCards() {
     'chain'
   );
 
-  const freshRoom = (await roomRef().once('value')).val();
-  await nextTurn(freshRoom);
+  await nextTurn(localState.playerId);
 }
 
 /**
@@ -1290,28 +1290,35 @@ async function onColorChosen(color) {
  * Reinicia el estado del turno en Firebase.
  * @param {object} room - snapshot actual
  */
-async function nextTurn(roomHint) {
-  // SIEMPRE leer el estado más reciente de Firebase antes de calcular
-  // el siguiente jugador. Esto evita bugs de datos stale con 3+ jugadores
-  // donde múltiples updates de Firebase pueden haber ocurrido entre que
-  // el caller tomó su snapshot y llama a nextTurn.
+/**
+ * Avanza el turno al siguiente jugador activo.
+ *
+ * DISEÑO CRÍTICO: Recibe explícitamente el ID del jugador ACTUAL para
+ * evitar depender de room.turn.playerId que puede estar stale.
+ * Esto soluciona el bug de 3+ jugadores donde indexOf() retornaba -1
+ * haciendo que el juego siempre volviera al primer jugador (ordered[0]).
+ *
+ * @param {string} currentPlayerId - El jugador cuyo turno ACABA de terminar
+ */
+async function nextTurn(currentPlayerId) {
+  // Leer estado fresco de Firebase
   let room;
   try {
     const snap = await roomRef().once('value');
     if (!snap.exists()) return;
     room = snap.val();
   } catch (err) {
-    // Fallback: usar el hint pasado si Firebase falla
-    room = roomHint;
-    console.warn('[nextTurn] Usando roomHint por error en fetch:', err.message);
+    console.error('[nextTurn] Error al leer Firebase:', err.message);
+    return;
   }
 
-  if (!room?.players || !room.turn) return;
+  if (!room?.players) return;
 
-  const nextId     = getNextPlayerId(room);
-  const nextPlayer = room.players[nextId];
-  const nextName   = nextPlayer?.name || 'Jugador';
-  const now        = firebase.database.ServerValue.TIMESTAMP;
+  const nextId   = getNextPlayerId(room, currentPlayerId);
+  const nextName = room.players[nextId]?.name || 'Jugador';
+  const now      = firebase.database.ServerValue.TIMESTAMP;
+
+  console.log(`[nextTurn] ${currentPlayerId} → ${nextId} (${nextName}) | dir:${room.direction}`);
 
   try {
     await roomRef().update({
@@ -1322,44 +1329,77 @@ async function nextTurn(roomHint) {
       'turn/skipped':         false,
       // pendingDraw y drawChainActive se mantienen si hay cadena activa
     });
-
     await addEvent(`▶️ Turno de ${nextName}.`, 'turn');
-    console.log('[nextTurn] →', nextId, nextName);
-
   } catch (err) {
-    console.error('[nextTurn]', err);
+    console.error('[nextTurn] Error al actualizar Firebase:', err);
   }
 }
 
 /**
- * Calcula el ID del siguiente jugador según la dirección actual.
- * Salta jugadores eliminados y desconectados.
+ * Calcula el ID del siguiente jugador dado el jugador ACTUAL explícito.
+ *
+ * CAMBIO CLAVE: Recibe currentPlayerId explícito en lugar de leer
+ * room.turn.playerId, eliminando el bug donde indexOf() retornaba -1
+ * cuando room.turn.playerId no estaba en la lista de activos.
+ *
  * @param {object} room
+ * @param {string} currentPlayerId - Jugador cuyo turno termina
  * @returns {string} playerId del siguiente jugador
  */
-function getNextPlayerId(room) {
+function getNextPlayerId(room, currentPlayerId) {
   // Solo jugadores activos (no eliminados)
-  const ordered    = getPlayersOrdered(room, true);
-  if (ordered.length === 0) return room.turn?.playerId;
+  const ordered = getPlayersOrdered(room, true);
+
+  console.log('[getNextPlayerId] ordered:', ordered.map(id => room.players[id]?.name));
+  console.log('[getNextPlayerId] currentPlayerId:', currentPlayerId, '| name:', room.players[currentPlayerId]?.name);
+
+  if (ordered.length === 0) {
+    console.warn('[getNextPlayerId] No hay jugadores activos!');
+    return currentPlayerId;
+  }
   if (ordered.length === 1) return ordered[0];
 
-  const currentIdx = ordered.indexOf(room.turn?.playerId);
-  const step       = room.direction === 1 ? 1 : -1;
-  const len        = ordered.length;
+  // Si currentPlayerId no está en la lista activa (eliminado o no encontrado),
+  // buscar en la lista COMPLETA para calcular la posición relativa.
+  let currentIdx = ordered.indexOf(currentPlayerId);
 
-  // Buscar el siguiente jugador conectado
-  let attempts = 0;
-  let nextIdx  = ((currentIdx + step) % len + len) % len;
-
-  while (attempts < len) {
-    const candidate = ordered[nextIdx];
-    if (room.players[candidate]?.connected !== false) return candidate;
-    nextIdx  = ((nextIdx + step) % len + len) % len;
-    attempts++;
+  if (currentIdx === -1) {
+    // El jugador actual fue eliminado o no está en activos.
+    // Buscar en la lista completa (incluyendo eliminados) para
+    // calcular desde qué posición avanzar.
+    const allOrdered = getPlayersOrdered(room, false);
+    const allIdx     = allOrdered.indexOf(currentPlayerId);
+    // Encontrar el siguiente activo desde esa posición
+    const step = room.direction === 1 ? 1 : -1;
+    const allLen = allOrdered.length;
+    for (let i = 1; i <= allLen; i++) {
+      const candidateIdx = ((allIdx + step * i) % allLen + allLen) % allLen;
+      const candidateId  = allOrdered[candidateIdx];
+      if (ordered.includes(candidateId)) {
+        console.log('[getNextPlayerId] fallback desde eliminado → ', room.players[candidateId]?.name);
+        return candidateId;
+      }
+    }
+    // Último recurso
+    return ordered[0];
   }
 
-  // Si todos están desconectados, retornar el siguiente de todas formas
-  return ordered[((currentIdx + step) % len + len) % len];
+  const step = room.direction === 1 ? 1 : -1;
+  const len  = ordered.length;
+
+  // Avanzar al siguiente, saltando desconectados
+  for (let i = 1; i <= len; i++) {
+    const nextIdx     = ((currentIdx + step * i) % len + len) % len;
+    const candidateId = ordered[nextIdx];
+    if (room.players[candidateId]?.connected !== false) {
+      console.log(`[getNextPlayerId] idx ${currentIdx} → ${nextIdx} = ${room.players[candidateId]?.name}`);
+      return candidateId;
+    }
+  }
+
+  // Si todos desconectados, retornar el siguiente de todas formas
+  const fallbackIdx = ((currentIdx + step) % len + len) % len;
+  return ordered[fallbackIdx];
 }
 
 
@@ -1491,15 +1531,13 @@ async function handleTimeout(room) {
     // ── Sin jugables → robar 1 y pasar ─────────────────────────
     await drawCardsFromDeck(localState.playerId, 1, freshRoom);
     await addEvent(`🃏 ${localState.playerName} robó (sin jugables, auto).`, 'draw');
-    const r2 = (await roomRef().once('value')).val();
-    await nextTurn(r2);
+    await nextTurn(localState.playerId);
 
   } catch (err) {
     console.error('[handleTimeout]', err);
     // Fallback: pasar el turno
     try {
-      const r = (await roomRef().once('value')).val();
-      if (r) await nextTurn(r);
+      await nextTurn(localState.playerId);
     } catch (e) { console.error('[handleTimeout fallback]', e); }
   }
 }
@@ -1614,7 +1652,9 @@ async function continueGame() {
 
   // Pasar el turno al siguiente jugador activo
   // (el que terminó ya está marcado como eliminated)
-  const nextId = getNextPlayerId(freshRoom);
+  // Pasar el ID del jugador que terminó como "current" para calcular el siguiente
+  const finishedPlayerId = freshRoom.turn?.playerId || '';
+  const nextId = getNextPlayerId(freshRoom, finishedPlayerId);
   const now    = firebase.database.ServerValue.TIMESTAMP;
 
   await roomRef().update({
