@@ -711,21 +711,26 @@ function isCardPlayable(card, room) {
     return isChainableCard(card);
   }
 
-  // ── Comodín sin color: siempre jugable (sin cadena) ──────────
+  // ── Comodín sin color (+4, cambio de color): siempre jugable ──
+  // No tienen color propio, se juegan sobre cualquier carta.
   if (isColorlessCard(card)) return true;
 
   // ── Coincidencia de color activo ──────────────────────────────
+  // Cubre: números, +2, bloqueo y reversa del mismo color.
   if (card.color && card.color === room.activeColor) return true;
 
-  // ── Coincidencia de tipo (ej: +2 sobre +2 de otro color) ─────
-  if (topCard && card.type === topCard.type) return true;
-
-  // ── Coincidencia de valor numérico ────────────────────────────
+  // ── Coincidencia de número (solo cartas numéricas) ────────────
+  // Ejemplo: 7 azul sobre 7 rojo.
   if (
     card.type === CARD_TYPES.NUMBER &&
     topCard?.type === CARD_TYPES.NUMBER &&
     card.value === topCard.value
   ) return true;
+
+  // NOTA: NO se permite mismo tipo entre colores distintos.
+  // (Skip rojo NO va sobre Skip azul a menos que el color activo sea rojo)
+  // Para habilitar esa regla, descomenta la siguiente línea:
+  // if (topCard && card.type === topCard.type) return true;
 
   return false;
 }
@@ -1215,9 +1220,19 @@ async function applyUnoPenalty() {
  * Resetea el estado del botón UNO al inicio de cada turno del jugador.
  */
 function resetUnoButton() {
-  localState.saidUno = false;
+  // IMPORTANTE: NO resetear localState.saidUno aquí.
+  // El reset de saidUno solo ocurre en onRoomUpdate cuando cambia el turno.
+  // Si se resetea aquí, el estado se pierde en cada re-render de Firebase.
   const btn = document.getElementById('btn-uno');
   if (!btn) return;
+
+  // Si ya lo presionó este turno → mantener el estado verde
+  if (localState.saidUno) {
+    btn.classList.add('said');
+    btn.classList.remove('alert-pulse');
+    btn.textContent = '✓ UNO!';
+    return;
+  }
 
   btn.classList.remove('said', 'alert-pulse');
   btn.textContent = 'UNO!';
