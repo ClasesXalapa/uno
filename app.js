@@ -944,7 +944,8 @@ async function handleDrawTwo(room) {
     'turn/drawChainActive': true,
   });
   await addEvent(`⚠️ Cadena activa: +${pending} cartas acumuladas.`, 'chain');
-  await nextTurn(room);
+  // nextTurn lee fresh data internamente — el null hint es suficiente
+  await nextTurn(null);
 }
 
 /**
@@ -959,7 +960,7 @@ async function handleDrawFour(room, chosenColor) {
   });
   const colorLabel = chosenColor ? COLOR_NAMES[chosenColor] : '';
   await addEvent(`⚠️ Cadena activa: +${pending} cartas. Color: ${colorLabel}`, 'chain');
-  await nextTurn(room);
+  await nextTurn(null);
 }
 
 /**
@@ -999,6 +1000,7 @@ async function handleSkip(room) {
     'turn/skipped':         false,
   });
   await addEvent(`▶️ Turno de ${room.players[afterId]?.name || 'Jugador'}.`, 'turn');
+  console.log('[handleSkip] Skipped', room.players[nextId]?.name, '→', room.players[afterId]?.name);
 }
 
 /**
@@ -1288,7 +1290,22 @@ async function onColorChosen(color) {
  * Reinicia el estado del turno en Firebase.
  * @param {object} room - snapshot actual
  */
-async function nextTurn(room) {
+async function nextTurn(roomHint) {
+  // SIEMPRE leer el estado más reciente de Firebase antes de calcular
+  // el siguiente jugador. Esto evita bugs de datos stale con 3+ jugadores
+  // donde múltiples updates de Firebase pueden haber ocurrido entre que
+  // el caller tomó su snapshot y llama a nextTurn.
+  let room;
+  try {
+    const snap = await roomRef().once('value');
+    if (!snap.exists()) return;
+    room = snap.val();
+  } catch (err) {
+    // Fallback: usar el hint pasado si Firebase falla
+    room = roomHint;
+    console.warn('[nextTurn] Usando roomHint por error en fetch:', err.message);
+  }
+
   if (!room?.players || !room.turn) return;
 
   const nextId     = getNextPlayerId(room);
@@ -1296,8 +1313,6 @@ async function nextTurn(room) {
   const nextName   = nextPlayer?.name || 'Jugador';
   const now        = firebase.database.ServerValue.TIMESTAMP;
 
-  // Si el siguiente turno tiene cadena activa y el jugador no tiene
-  // cartas acumulables → robar automáticamente (se maneja en startTurnLogic)
   try {
     await roomRef().update({
       'turn/playerId':        nextId,
@@ -1896,14 +1911,15 @@ function renderActionButtons(room) {
   const showDraw = myTurn && !chainAct && !skipped && !drewAlr;
   btnDraw.style.display = showDraw ? 'inline-flex' : 'none';
 
-  // Si hay cadena activa y es mi turno → cambiar texto del botón a "Robar cadena"
+  // Si hay cadena activa y es mi turno → cambiar texto del botón
+  // IMPORTANTE: NO asignar onclick aquí — ya hay un addEventListener permanente
+  // en registerUIListeners que maneja ambos casos (drawChainCards / drawOneCard).
+  // Asignar onclick además del addEventListener causaba doble llamada con 3+ jugadores.
   if (myTurn && chainAct && !skipped) {
     btnDraw.style.display = 'inline-flex';
     btnDraw.textContent   = `💥 Robar ${room.turn?.pendingDraw || 0} cartas`;
-    btnDraw.onclick       = () => drawChainCards();
   } else if (showDraw) {
     btnDraw.textContent   = '🃏 Robar carta';
-    btnDraw.onclick       = () => drawOneCard();
   }
 
   // Botón "Pasar turno":
